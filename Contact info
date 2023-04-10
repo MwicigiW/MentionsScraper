@@ -1,0 +1,98 @@
+import os
+import pickle
+import gspread
+import time
+import requests
+from bs4 import BeautifulSoup
+import re
+from google.oauth2 import service_account
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from validate_email import validate_email
+
+# The CLIENT_SECRET_FILE should point to the JSON file you downloaded when you created the OAuth 2.0 Client ID
+CLIENT_SECRET_FILE = '/Users/shiggy/Downloads/client_secret_210717428146-e96jhmkfun2o59gacdh0bqkek1ro5p11.apps.googleusercontent.com.json'
+TOKEN_FILE = 'token.pickle'
+
+scope = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
+]
+creds = None
+if os.path.exists(TOKEN_FILE):
+    try:
+        with open(TOKEN_FILE, 'rb') as token:
+            creds = pickle.load(token)
+    except EOFError:
+        creds = None
+
+if not creds or not creds.valid:
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, scope)
+        creds = flow.run_local_server(port=0)
+
+    with open(TOKEN_FILE, 'wb') as token:
+        pickle.dump(creds, token)
+
+# Authenticate Google Sheets API credentials
+client = gspread.authorize(creds)
+
+# Open the spreadsheet and select the appropriate sheet
+sheet = client.open('Copy of GPTEASY').worksheet('Reference Info')
+
+# Get the values from column B, starting at row 2
+names = sheet.col_values(5)[1:]
+
+# Loop through each name in the list
+for name in names:
+    # Construct the search query
+    query = f"{name} site:.edu contact"
+
+    # Scrape the search results and extract any email addresses and phone numbers found
+    response = requests.get(f"https://www.google.com/search?q={query}")
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Extract the email address
+    email_tags = soup.select('a[href^=mailto]')
+    if email_tags:
+        email = email_tags[0]['href'][7:]
+    else:
+        email = "Not found"
+    if not validate_email(email):
+        email = "Invalid email"
+    
+    # Extract the phone number
+    phone_regex = re.compile(r'((\(\d{3}\) ?)|(\d{3}-))?\d{3}-\d{4}')
+    phone_tags = soup.find_all(string=phone_regex)
+    if phone_tags:
+        phone = phone_tags[0]
+    else:
+        phone = "Not found"
+
+    # Find the index of the current name in the list
+    index = names.index(name)
+
+    # Construct the search query
+    query = f"{name} site:linkedin.com/in/"
+
+    # Scrape the search results and extract any LinkedIn profile URLs found
+    response = requests.get(f"https://www.google.com/search?q={query}")
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Extract the LinkedIn profile URL
+    linkedin_url = None
+    for tag in soup.select('div.r a'):
+        if 'linkedin.com/in/' in tag.get('href', ''):
+            linkedin_url = tag['href']
+            break
+
+    # Update the corresponding cell in the sheet with the LinkedIn profile URL
+    try:
+        sheet.update_cell(index + 2, 14, linkedin_url)
+    except gspread.exceptions.APIError as e:
+     print(f"Encountered error: {e}. Skipping cell {index+2}, 3 and {index+2}, 4")
+
+# Add a delay to avoid sending too many requests too quickly
+time.sleep(2) 

@@ -1,0 +1,73 @@
+import requests
+from bs4 import BeautifulSoup
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from datetime import datetime, timedelta
+import openai
+
+openai.api_key = "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"
+
+def generate_summary(url):
+    prompt = f"Please summarize the main points of the following webpage: {url}"
+    response = openai.Completion.create(engine="text-davinci-002", prompt=prompt, max_tokens=50, n=1, stop=None, temperature=0.5)
+    summary = response.choices[0].text.strip()
+    return summary
+
+def search_mentions(query, api_key):
+    service = build("customsearch", "v1", developerKey=api_key)
+    results = service.cse().list(
+        q=query,
+        cx='f606561ac8fb944a2',
+    ).execute()
+
+    if 'items' not in results:
+        print("No search results found.")
+        return []
+
+
+    data = []
+    for result in results['items']:
+        url = result['link']
+        try:
+            date = result['pagemap']['metatags'][0]['og:updated_time']
+        except KeyError:
+            date = 'Not available'
+
+        summary = generate_summary(url)
+        title = result['title']
+        snippet = result['snippet']
+        data.append([date, url, title, snippet, summary])
+
+    return data
+
+# API key
+api_key = 'AIzaSyCZr-0TFOLUVAtHPSXSe1Xp8mf8zNTTmTo'
+
+# Google Sheets API setup
+SERVICE_ACCOUNT_FILE = '/Users/shiggy/Downloads/web-scraper-mentions-6f7d54c2f33c.json'
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
+creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE).with_scopes(SCOPES)
+sheets_api = build('sheets', 'v4', credentials=creds)
+
+# Update this with your Google Sheet ID and range
+SPREADSHEET_ID = '11o4iVhgfM_LbWW5obV47nEvGapuJZHrHpbM7_kAfxZs'
+RANGE_NAME = 'Mentions!A1'
+
+def append_data_to_sheet(spreadsheet_id, range_name, data):
+    try:
+        body = {'values': data}
+        result = sheets_api.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id, range=range_name,
+            valueInputOption='RAW', insertDataOption='INSERT_ROWS',
+            body=body).execute()
+        print(f"{result.get('updates').get('updatedCells')} cells updated.")
+    except HttpError as error:
+        print(f"An error occurred: {error}")
+        result = None
+    return result
+
+if __name__ == '__main__':
+    mentions = search_mentions("Share Ventures", api_key)
+    append_data_to_sheet(SPREADSHEET_ID, RANGE_NAME, mentions)
